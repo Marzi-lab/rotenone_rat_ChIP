@@ -1,2 +1,2 @@
 # rotenone_rat_ChIP
-Bulk H3K27ac ChIP-seq and RNA-seq analysis on SN and cortex of rotenone exposed rat
+This repository contains the scripts and the data required to reproduce all analyses, figures and tables for the paper "Unique nigral and cortical pathways implicated by epigenomic and transcriptional analyses in a rotenone rat model of Parkinson’s disease"
