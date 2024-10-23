@@ -800,7 +800,7 @@ grid.arrange(SN_cor_plot, CTX_cor_plot)
 ```
 
 ```{r save correlation plot}
-png(file = "/Users/mariatsalenchuk/Desktop/Bulk_Rat/Manuscript/figures/correlation.png", width = 1000, height = 1000, res = 150)
+png(file = "../figures/correlation.png", width = 1000, height = 1000, res = 150)
 
 ggarrange(CTX_cor_plot, SN_cor_plot, common.legend = TRUE, legend = "bottom", nrow = 2, ncol = 1)
 dev.off()
