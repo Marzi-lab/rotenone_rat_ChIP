@@ -1,0 +1,405 @@
+---
+title: "WGCNA"
+author: "Maria Tsalenchuk"
+date: "2024-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(WGCNA)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(clusterProfiler)
+library(stringi)
+library(readr)
+library(DESeq2)
+library(ChIPseeker)
+library(gtools)
+library(patchwork)
+library(png)
+library(org.Rn.eg.db)
+library(ggpubr)
+library(GenomicRanges)
+library(TxDb.Rnorvegicus.UCSC.rn7.refGene)
+library(openxlsx)
+library(gridExtra)
+library(ggseqlogo)
+library(scales)
+```
+
+```{r load data}
+load("/Users/mariatsalenchuk/Desktop/Bulk_Rat/Manuscript/github/WGCNA.rda")
+```
+
+```{r CTX WGCNA}
+# prepare metadata for the cortex
+meta_clean <- metadata[,c(1,6)]
+names(meta_clean) <- c("Sample", "Group")
+meta_CTX <- meta_clean[meta_clean$Sample %in% names(CTX_counts_rna),]
+rm(meta_clean)
+
+# create normalised DESeq Dataset
+CTX_DESeq <- DESeqDataSetFromMatrix(round(CTX_counts_rna), meta_CTX, design = ~1)
+CTX_DESeq_norm <- assay(vst(CTX_DESeq)) %>% t()
+rm(CTX_DESeq)
+
+# remove gene and sample outliers
+CTX_DESeq_good <- goodSamplesGenes(CTX_DESeq_norm, verbose = 3)
+CTX_DESeq_norm <- CTX_DESeq_norm[CTX_DESeq_good$goodSamples,CTX_DESeq_good$goodGenes]
+rm(CTX_DESeq_good)
+
+# plot soft threshold to select the appropriate value
+CTX_WGCNA_soft <- pickSoftThreshold(CTX_DESeq_norm, dataIsExpr = TRUE, corFnc = cor, networkType = "signed")
+CTX_WGCNA_soft <- data.frame(CTX_WGCNA_soft$fitIndices) %>% dplyr::mutate(model_fit = -sign(slope) * SFT.R.sq)
+ggplot(CTX_WGCNA_soft, aes(x = Power, y = model_fit, label = Power)) +
+  geom_point() + # Plot the points
+  geom_text(nudge_y = 0.1) + # Put the Power labels slightly above the data points
+  geom_hline(yintercept = 0.80, col = "red") + # Plot what WGCNA recommends as an R^2 cutoff
+  xlab("Soft Threshold (power)") + # We can add more sensible labels for our axis
+  ylab("Scale Free Topology Model Fit, signed R^2") +
+  ggtitle("Scale independence") +
+  theme_classic()
+ggplot(CTX_WGCNA_soft, aes(x = Power, y = mean.k., label = Power)) +
+  geom_point() + # Plot the points
+  geom_text(nudge_y = 1000) + # Put the Power labels slightly above the data points
+  xlab("Soft Threshold (power)") + # We can add more sensible labels for our axis
+  ylab("Mean connectivity") +
+  ggtitle("Mean connectivity") +
+  theme_classic()
+
+# run WGCNA using soft threshold = 12
+cor <- WGCNA::cor
+CTX_WGCNA <- blockwiseModules(CTX_DESeq_norm,
+  maxBlockSize = 30000, # What size chunks (how many genes) the calculations should be run in
+  TOMType = "signed", # topological overlap matrix
+  power = 12, # soft threshold for network construction
+  networkType = "signed",
+  numericLabels = FALSE, # use colours instead of numbers for module labels
+  randomSeed = 1234) # to control randomness associated with this calculation
+
+# group-level correlation
+groups_CTX <- as.data.frame(model.matrix(~0 + meta_CTX$Group))
+names(groups_CTX) <- c("control", "rotenone")
+ME_group_CTX <- as.data.frame(WGCNA::cor(CTX_WGCNA$MEs, groups_CTX, use = "p"))
+ME_group_CTX$pValue <- corPvalueStudent(ME_group_CTX[,1], nrow(CTX_DESeq_norm))
+
+# match colours to MEs
+colourRef_ME_CTX <- data.frame("ME_col" = names(CTX_WGCNA$MEs),
+                       "ME_num" = paste0("ME", 1:ncol(CTX_WGCNA$MEs)),
+                       "Colour" = sub("ME","", names(CTX_WGCNA$MEs)))
+
+# match colours to genes
+colourRef_gene_CTX <- as.data.frame(CTX_WGCNA$colors)
+names(colourRef_gene_CTX) <- "Colour"
+colourRef_gene_CTX$Gene <- row.names(colourRef_gene_CTX)
+colourRef_gene_CTX <- merge(colourRef_gene_CTX, colourRef_ME_CTX, by = "Colour", all = TRUE)
+colourRef_gene_CTX <- colourRef_gene_CTX[order(colourRef_gene_CTX$Gene),]  # match gene order to WGCNA result (gene name a-z)
+```
+
+```{r SN WGCNA}
+meta_clean <- metadata[,c(1,6)]
+names(meta_clean) <- c("Sample", "Group")
+meta_SN <- meta_clean[meta_clean$Sample %in% names(SN_counts_rna),]
+rm(meta_clean)
+
+# create normalised DESeq Dataset
+SN_DESeq <- DESeqDataSetFromMatrix(round(SN_counts_rna), meta_SN, design = ~1)
+SN_DESeq_norm <- assay(vst(SN_DESeq)) %>% t()
+rm(SN_DESeq)
+
+# remove gene and sample outliers
+SN_DESeq_good <- goodSamplesGenes(SN_DESeq_norm, verbose = 3)
+SN_DESeq_norm <- SN_DESeq_norm[SN_DESeq_good$goodSamples,SN_DESeq_good$goodGenes]
+rm(SN_DESeq_good)
+
+# plot soft threshold to select the appropriate value
+SN_WGCNA_soft <- pickSoftThreshold(SN_DESeq_norm, dataIsExpr = TRUE, corFnc = cor, networkType = "signed")
+SN_WGCNA_soft <- data.frame(SN_WGCNA_soft$fitIndices) %>% dplyr::mutate(model_fit = -sign(slope) * SFT.R.sq)
+ggplot(SN_WGCNA_soft, aes(x = Power, y = model_fit, label = Power)) +
+  geom_point() + # Plot the points
+  geom_text(nudge_y = 0.1) + # Put the Power labels slightly above the data points
+  geom_hline(yintercept = 0.80, col = "red") + # Plot what WGCNA recommends as an R^2 cutoff
+  xlab("Soft Threshold (power)") + # We can add more sensible labels for our axis
+  ylab("Scale Free Topology Model Fit, signed R^2") +
+  ggtitle("Scale independence") +
+  theme_classic()
+ggplot(SN_WGCNA_soft, aes(x = Power, y = mean.k., label = Power)) +
+  geom_point() + # Plot the points
+  geom_text(nudge_y = 1000) + # Put the Power labels slightly above the data points
+  xlab("Soft Threshold (power)") + # We can add more sensible labels for our axis
+  ylab("Mean connectivity") +
+  ggtitle("Mean connectivity") +
+  theme_classic()
+
+# run WGCNA using soft threshold = 6
+SN_WGCNA <- blockwiseModules(SN_DESeq_norm,
+  maxBlockSize = 30000, # What size chunks (how many genes) the calculations should be run in
+  TOMType = "signed", # topological overlap matrix
+  power = 6, # soft threshold for network construction
+  networkType = "signed",
+  numericLabels = FALSE, # use colours instead of numbers for module labels
+  randomSeed = 1234) # to control randomness associated with this calculation
+
+# group-level correlation
+groups_SN <- as.data.frame(model.matrix(~0 + meta_SN$Group))
+names(groups_SN) <- c("control", "rotenone")
+ME_group_SN <- as.data.frame(WGCNA::cor(SN_WGCNA$MEs, groups_SN, use = "p"))
+ME_group_SN$pValue <- corPvalueStudent(ME_group_SN[,1], nrow(SN_DESeq_norm))
+
+# match colours to MEs
+colourRef_ME_SN <- data.frame("ME_col" = names(SN_WGCNA$MEs),
+                       "ME_num" = paste0("ME", 1:ncol(SN_WGCNA$MEs)),
+                       "Colour" = sub("ME","", names(SN_WGCNA$MEs)))
+
+# match colours to genes
+colourRef_gene_SN <- as.data.frame(SN_WGCNA$colors)
+names(colourRef_gene_SN) <- "Colour"
+colourRef_gene_SN$Gene <- row.names(colourRef_gene_SN)
+colourRef_gene_SN <- merge(colourRef_gene_SN, colourRef_ME_SN, by = "Colour", all = TRUE)
+colourRef_gene_SN <- colourRef_gene_SN[order(colourRef_gene_SN$Gene),]  # match gene order to WGCNA result (gene name a-z)
+```
+
+```{r differential gene module CTX + SN}
+# replace 'MEcolour' names with 'MEnumber' names
+MEs_sample_CTX <- CTX_WGCNA$MEs
+names(MEs_sample_CTX) <- colourRef_ME_CTX$ME_num
+MEs_sample_SN <- SN_WGCNA$MEs
+names(MEs_sample_SN) <- colourRef_ME_SN$ME_num
+# differential expression between modules using limma
+design <- model.matrix(~0 + meta_CTX$Group)
+colnames(design) <- c("Control", "Rotenone")
+fit <- limma::lmFit(t(MEs_sample_CTX), design)
+fit <- contrasts.fit(fit, makeContrasts(Rotenone-Control, levels=design))
+fit <- eBayes(fit, trend=TRUE)
+
+# multiple correction testing
+ME_DA_CTX <- limma::topTable(fit, adjust.method="fdr", sort.by="p", number = ncol(MEs_sample_CTX)) %>%  tibble::rownames_to_column("module")
+names(ME_DA_CTX)[6] <- "FDR"
+ME_DA_CTX <- ME_DA_CTX %>% mutate(DA = ifelse(logFC > 0 & FDR < 0.05, "UP",
+              ifelse(logFC < 0 & FDR < 0.05, "DOWN", "non-significant")))
+ME_DA_CTX$DA <- factor(ME_DA_CTX$DA, levels=c("UP", "DOWN", "non-significant"))
+rm(design, fit)
+
+# differential expression between modules using limma
+design <- model.matrix(~0 + meta_SN$Group)
+colnames(design) <- c("Control", "Rotenone")
+fit <- limma::lmFit(t(MEs_sample_SN), design)
+fit <- contrasts.fit(fit, makeContrasts(Rotenone-Control, levels=design))
+fit <- eBayes(fit, trend=TRUE)
+
+# multiple correction testing
+ME_DA_SN <- limma::topTable(fit, adjust.method="fdr", sort.by="p", number = ncol(MEs_sample_SN)) %>%
+  tibble::rownames_to_column("module")
+names(ME_DA_SN)[6] <- "FDR"
+ME_DA_SN <- ME_DA_SN %>% mutate(DA = ifelse(logFC > 0 & FDR < 0.05, "UP",
+              ifelse(logFC < 0 & FDR < 0.05, "DOWN", "non-significant")))
+ME_DA_SN$DA <- factor(ME_DA_SN$DA, levels=c("UP", "DOWN", "non-significant"))
+rm(design, fit)
+```
+
+```{r plotting differential gene modules}
+ME_DA_CTX_plot <- 
+  ggplot(ME_DA_CTX, aes(x=logFC, y=-log10(FDR))) + 
+  geom_point(aes(color=DA, size=FDR), alpha = 0.7) + 
+  xlim(-0.8, 0.8) + ylim(0, 4) + 
+  xlab(expression("logFC")) +  
+  ylab("-log10(FDR)") + 
+  ggtitle("Cortex") + 
+  theme_minimal() + 
+  guides(colour = "none", size = "none") + 
+  scale_colour_manual(values = c("#278B9AFF", "#e0b1a6")) +
+  scale_size_continuous(trans = "reverse", breaks = c(1, 0.5, 0.05), limits = c(1, 0), range = c(1, 5), name = "FDR") + 
+  theme(text = element_text(size = 14), plot.title = element_text(size = 14, face = "bold", vjust=2.5)) + 
+  geom_label_repel(size = 3.5, data = ME_DA_CTX[1,], min.segment.length = unit(0, 'lines'), 
+                   aes(x = logFC, y = -log10(FDR), label="cellular respiration"),
+                   show.legend=FALSE, max.overlaps = 10, force = 30)
+ME_DA_CTX_plot <- ME_DA_CTX_plot + theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 16),  
+        axis.line.x = element_line(color = "black"),  
+        legend.position = "none",
+        plot.title = element_text(size = 20, hjust = 0.5))
+
+module_labels <- c("ME15" = "neurogenesis",
+                   "ME2" = "kinase regulation",
+                   "ME21" = "mitochondrial complex activity",
+                   "ME22" = "microtubule binding",
+                   "ME23" = "aerobic respiration",
+                   "ME24" = "protein synthesis",
+                   "ME30" = "methyltransferase activity")
+ME_DA_SN <- ME_DA_SN %>%
+  mutate(module_label = module_labels[module])
+ME_DA_SN_plot <- 
+  ggplot(ME_DA_SN, aes(x=logFC, y=-log10(FDR))) + 
+  geom_point(aes(color=DA, size=FDR), alpha = 0.7) + 
+  xlim(-0.8,0.8) + ylim(0,4) + 
+  xlab(expression("logFC")) + ylab("") + 
+  ggtitle("SN") + theme_minimal() + 
+  guides(colour = guide_legend(title="", override.aes = list(shape=19, size=3)), 
+         size = guide_legend(title="FDR")) + 
+  scale_colour_manual(values = c("#DE7862FF", "#278B9AFF", "#afe3d2")) +
+  scale_size_continuous(trans = "reverse",breaks = c(1,0.5, 0.05), 
+                        limits = c(1,0),range = c(1,5), name = "FDR") + 
+  theme(text = element_text(size = 14), plot.title = element_text(size = 14, face = "bold", vjust=2.5)) + 
+  geom_label_repel(size = 3.5, data = ME_DA_SN[1:7,], min.segment.length = unit(0, 'lines'), 
+                   aes(x = logFC, y = -log10(FDR), label=module_label, size=0.1),
+                   show.legend=FALSE, max.overlaps = 10, force = 30)
+
+ME_DA_SN_plot <- ME_DA_SN_plot + theme_classic() +
+  theme(axis.title = element_text(size = 16),  
+        axis.text = element_text(size = 16),  
+        axis.line.x = element_line(color = "black"),  
+        legend.position = "none",
+        plot.title = element_text(size = 20, hjust = 0.5))
+       
+ME_DA_plot <- ggarrange(ME_DA_CTX_plot, ME_DA_SN_plot, common.legend = TRUE, legend = "bottom", ncol = 2)
+ME_DA_plot <- annotate_figure(ME_DA_plot, top = text_grob("Differential gene module expression", size =16, face="bold"))
+```
+
+```{r ME go enrichment}
+# prepare output lists
+ME_GO_CTX <- list(ME68=NULL)
+ME_GO_SN <- setNames(rep(list(NULL), 7), ME_DA_SN$module[1:7])
+
+# GO enrichment for ME in the cortex
+for (x in names(ME_GO_CTX)){
+  print(x)
+  genes <- colourRef_gene_CTX$Gene[colourRef_gene_CTX$ME_num == x]
+  print(paste0("number of genes in this ME = ", length(genes)))
+  
+  print("GO_Molecular_Function")
+  GO <- enrichGO(genes, OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                 ont = "MF", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                 qvalueCutoff = 0.05, universe = NULL,
+                 minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    ME_GO_CTX[[x]]$GO_Molecular_Function <- as.data.frame(GO@result)
+    ME_GO_CTX[[x]]$GO_Molecular_Function$ME <- x
+    ME_GO_CTX[[x]]$GO_Molecular_Function$category <- "Molecular function"
+  }
+  
+  print("GO_Biological_Process")
+  GO <- enrichGO(genes, OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                 ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                 qvalueCutoff = 0.05, universe = NULL,
+                 minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    ME_GO_CTX[[x]]$GO_Biological_Process <- as.data.frame(GO@result)
+    ME_GO_CTX[[x]]$GO_Biological_Process$ME <- x
+    ME_GO_CTX[[x]]$GO_Biological_Process$category <- "Biological process"
+  }
+  
+  rm(x, genes)
+}
+
+# GO enrichment for ME in the ventral midbrain
+for (x in names(ME_GO_SN)){
+  print(x)
+  genes <- colourRef_gene_SN$Gene[colourRef_gene_SN$ME_num == x]
+  print(paste0("number of genes in this ME = ", length(genes)))
+  
+  print("GO_Molecular_Function")
+  GO <- enrichGO(genes, OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                 ont = "MF", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                 qvalueCutoff = 0.05, universe = NULL, 
+                 minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    ME_GO_SN[[x]]$GO_Molecular_Function <- as.data.frame(GO@result)
+    ME_GO_SN[[x]]$GO_Molecular_Function$ME <- x
+    ME_GO_SN[[x]]$GO_Molecular_Function$category <- "Molecular function"
+  }
+  
+  print("GO_Biological_Process")
+  GO <- enrichGO(genes, OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                 ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                 qvalueCutoff = 0.05, universe = NULL, 
+                 minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    ME_GO_SN[[x]]$GO_Biological_Process <- as.data.frame(GO@result)
+    ME_GO_SN[[x]]$GO_Biological_Process$ME <- x
+    ME_GO_SN[[x]]$GO_Biological_Process$category <- "Biological process"
+  }
+  
+  rm(x, genes)
+}
+
+
+# GO summary
+ME_GO_CTX_all <- do.call(rbind, lapply(unlist(ME_GO_CTX, recursive = FALSE), as.data.frame))
+ME_GO_CTX_top <- ME_GO_CTX_all %>% arrange(p.adjust) %>% slice_head(n=10)
+ME_GO_CTX_top$GeneRatioNumeric <- sapply(ME_GO_CTX_top$GeneRatio, function(x) eval(parse(text = x)))
+
+ME_GO_SN_all <- do.call(rbind, lapply(unlist(ME_GO_SN, recursive = FALSE), as.data.frame))
+ME_GO_SN_top <- ME_GO_SN_all %>% arrange(p.adjust) %>% group_by(ME) %>% slice_head(n=10)
+ME_GO_SN_top$GeneRatioNumeric <- sapply(ME_GO_SN_top$GeneRatio, function(x) eval(parse(text = x)))
+```
+
+```{r bubble plot CTX ME68}
+## Top 10 enriched GO terms for genes in cortex ME68 ##
+ME_GO_CTX_ME68_plot <- 
+  ggplot(ME_GO_CTX_top,
+         aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)))) +
+  geom_point(aes(size = -log10(p.adjust), color = -log10(p.adjust)), alpha = 0.7) + 
+  scale_color_gradient(low = "#278B9AFF", high = "#5A6F80FF") +
+  scale_size(range = c(1, 10)) +
+  theme_minimal() + 
+  theme(axis.text.y = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        plot.title = element_text(size = 16, hjust = 1, face = "bold"),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16)) +
+  ggtitle("") +
+  xlab("Gene Ratio") +
+  ylab("") +
+   guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "-log10(FDR)")) +
+  scale_y_discrete(labels = label_wrap_gen(35)) 
+```
+
+```{r bubble plot SN ME21}
+## Top 10 enriched GO terms for genes in midbrain ME21 ##
+ME_GO_SN_ME21_plot <-
+  ggplot(ME_GO_SN_top[ME_GO_SN_top$ME=="ME21",],
+       aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)))) +
+  geom_point(aes(size = -log10(p.adjust), color = -log10(p.adjust)), alpha = 0.7) + 
+  scale_color_gradient(low = "#278B9AFF", high = "#5A6F80FF") +
+  scale_size(range = c(1, 10)) +
+  theme_minimal() + 
+  theme(axis.text.y = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        plot.title = element_text(size = 16, hjust = 1, face = "bold"),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16)) +
+  ggtitle("") +
+  xlab("Gene Ratio") + 
+  ylab("") +
+   guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "-log10(FDR)")) +
+  scale_y_discrete(labels = label_wrap_gen(35)) 
+```
+
+```{r bubble plot SN ME24}
+## Top 10 enriched GO terms for genes in midbrain ME24 ##
+ME_GO_SN_ME24_plot <-
+  ggplot(ME_GO_SN_top[ME_GO_SN_top$ME=="ME24",],
+       aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)))) +
+  geom_point(aes(size = -log10(p.adjust), color = -log10(p.adjust)), alpha = 0.7) + 
+  scale_color_gradient(low = "#D8AF39FF", high = "#DE7862FF") +
+  scale_size(range = c(1, 10)) +
+  theme_minimal() + 
+  theme(axis.text.y = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        plot.title = element_text(size = 16, hjust = 1, face = "bold"),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16)) +
+  ggtitle("") +
+  xlab("Gene Ratio") + 
+  ylab("") +
+   guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "-log10(FDR)")) +
+  scale_y_discrete(labels = label_wrap_gen(35)) # Adjust wrapping as needed
+```
+
+```{r arrange plot}
+ME_GO_plot <- ggarrange(ME_GO_CTX_ME68_plot, ME_GO_SN_ME21_plot,ME_GO_SN_ME24_plot, common.legend = TRUE, legend = "bottom", ncol = 3)
+```
