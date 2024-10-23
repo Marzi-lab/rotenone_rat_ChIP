@@ -1,0 +1,499 @@
+---
+title: "Overlapping/unique peaks"
+author: "Maria Tsalenchuk"
+date: "2024-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(edgeR)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(clusterProfiler)
+library(stringi)
+library(readr)
+library(DESeq2)
+library(ChIPseeker)
+library(gtools)
+library(patchwork)
+library(png)
+library(org.Rn.eg.db)
+library(ggpubr)
+library(GenomicRanges)
+library(TxDb.Rnorvegicus.UCSC.rn7.refGene)
+library(openxlsx)
+library(gridExtra)
+library(ggseqlogo)
+library(scales)
+library(CHAS)
+```
+
+## III. Unique and overlapping peaks between brain regions
+
+```{r overlapping peaks}
+
+load("../data/overlap.rda")
+
+# List of peaks 
+cortex_peaks_list <- list(Cortex = CTX_peaks)
+SN_peaks_list <- list(SN = SN_peaks)
+
+# Annotate SN peaks and identify which overlap with cortex peaks, 0.5 specifies that a 50% overlap is required between the SN and cortex peak
+SN_CTX_ovlp <- CelltypeSpecificPeaks(SN_peaks[,1:4], cortex_peaks_list, 0.5)
+CTX_SN_ovlp <- CelltypeSpecificPeaks(CTX_peaks[,1:4], SN_peaks_list, 0.5)
+
+# Check which SN peaks overlap cortex peaks 
+# This will show you all your midbrain peaks that overlapped at least 50% of the cortex peaks (you can change the percentage to whatever you want in the CelltypeSpecificPeaks function)
+SN_CTX_50perc <- SN_CTX_ovlp[[1]]
+CTX_SN_50perc <- CTX_SN_ovlp[[1]]
+
+# Now we have overlapping peaks, need to merge the counts with remaining peaks 
+SN_CTX_counts.peaks <- merge(SN_CTX_50perc, SN_counts, by.x = "bulkPeak", by.y = "row.names")
+CTX_SN_counts.peaks <- merge(CTX_SN_50perc, CTX_counts, by.x = "bulkPeak", by.y = "row.names")
+
+SN_CTX_counts.peaks$ID <- paste(SN_CTX_counts.peaks$bulkStart, SN_CTX_counts.peaks$bulkEnd, sep = ".")
+CTX_SN_counts.peaks$ID <- paste(CTX_SN_counts.peaks$celltypeStart, CTX_SN_counts.peaks$celltypeEnd, sep= ".")
+
+ovlp_counts.peaks <- merge(SN_CTX_counts.peaks, CTX_SN_counts.peaks, by.x = "ID", by.y = "ID")
+ovlp_counts.peaks <- ovlp_counts.peaks[!duplicated(ovlp_counts.peaks$bulkPeak.x),]
+
+rownames(ovlp_counts.peaks) <- ovlp_counts.peaks$bulkPeak.x
+
+SNovlp_counts <- ovlp_counts.peaks[, c(10:18)]
+CTXovlp_counts <- ovlp_counts.peaks[, c(27:35)]
+SNovlp_peaks <- ovlp_counts.peaks[,c(4,5,6,2)]
+CTXovlp_peaks <- ovlp_counts.peaks[,c(4,7,8,2)]
+colnames(SNovlp_peaks) <- c("Chr", "Start", "End", "Peak")
+colnames(CTXovlp_peaks) <- c("Chr", "Start", "End", "Peak")
+rm(SN_CTX_counts.peaks,CTX_SN_counts.peaks,SN_CTX_50perc,CTX_SN_50perc,ovlp_counts.peaks)
+```
+
+```{r volcano plot overlapping peaks}
+# Define groups for each sample and set control as reference
+SNgroup = factor(c(rep("rotenone",5),rep("control",4)))
+SNgroup <- relevel(SNgroup, "control")
+
+# Create DGEList object and calculate normalisation factors
+SNpeakList <- DGEList(counts = SNovlp_counts, group = SNgroup)
+SNpeak_norm <- calcNormFactors(SNpeakList)
+
+# Estimate dispersion and fit model
+SNdesign <- model.matrix(~SNgroup)
+SNDGE_norm_disp <- estimateDisp(SNpeak_norm, SNdesign)
+SNfit <- glmQLFit(SNDGE_norm_disp, SNdesign)
+
+# Perform quasi-likelihood F test
+SNqlf <- glmQLFTest(SNfit)
+
+# Extract DARs
+SN_DAR <- SNqlf$table
+
+# Order peaks by significance
+SN_DAR$FDR <- p.adjust(SN_DAR$PValue, method="fdr")
+
+#Extract DARs
+SN_DAR <- SN_DAR[order(SN_DAR$PValue),]
+
+#Cleanup
+rm(SNDGE_norm_disp, SNfit, SNqlf, SNpeak_norm, SNdesign, SNpeakList)
+
+# Gene annotation and merge with dataset
+SNovlp_peaks$ID <- paste(SNovlp_peaks$Start, sep=".", SNovlp_peaks$End)
+m <- SNovlp_peaks$ID %in% SN_annot$ID
+SNovlp_peaks <- SNovlp_peaks[m,]
+
+SNovlp <- merge(SNovlp_peaks, SN_annot, by = "ID")
+rownames(SNovlp) <- SNovlp$Peak
+
+# summary table: add DAR category and sort by p value
+SNovlp <- merge(SN_DAR, SNovlp[,c(2:6,19:22)], by = "row.names")
+row.names(SNovlp) <- SNovlp$Row.names
+SNovlp <- SNovlp[,c(7:10,2:6,12,14)]
+names(SNovlp)[c(1,11)] <-  c("chr","GENE")
+SNovlp <- SNovlp %>% mutate(DAR = ifelse(logFC > 0 & FDR < 0.05, "Hyper",
+              ifelse(logFC < 0 & FDR < 0.05, "Hypo", "non-DAR"))) %>% arrange(PValue)
+SNovlp$DAR <- factor(SNovlp$DAR, levels=c("Hyper", "Hypo", "non-DAR"))
+
+# Volcano plot for unique SN peaks
+top_genes <- head(SNovlp, 20)
+
+SN_volcano <- ggplot(SNovlp, 
+                         aes(x=logFC, y=-log10(FDR), colour=DAR)) + 
+  geom_point(size=1) + 
+  xlim(-3,3) + 
+  ylim(0,11) +
+  scale_colour_manual(values=c("#83d4b9", "#83d4b9", "#afe3d2")) + 
+  theme_classic() + 
+  ylab("-log10(FDR)") + 
+  guides(colour="none") + 
+  theme(text = element_text(size=24), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("SN") + 
+  geom_text_repel(data = top_genes, aes(label = GENE), box.padding = 0.5, colour="#506777FF", size=5) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "slategrey") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "slategrey")
+
+CTXgroup = factor(c(rep("rotenone", 2), rep("control", 3), rep("rotenone", 2),"control","rotenone"))
+CTXgroup <- relevel(CTXgroup, "control")
+
+# Create DGEList object and calculate normalisation factors
+CTXpeakList <- DGEList(counts = CTXovlp_counts, group = CTXgroup)
+CTXpeak_norm <- calcNormFactors(CTXpeakList)
+
+# Estimate dispersion and fit model
+CTXdesign <- model.matrix(~CTXgroup)
+CTXDGE_norm_disp <- estimateDisp(CTXpeak_norm, CTXdesign)
+CTXfit <- glmQLFit(CTXDGE_norm_disp, CTXdesign)
+
+# Perform quasi-likelihood F test
+CTXqlf <- glmQLFTest(CTXfit)
+
+# Extract DARs
+CTX_DAR <- CTXqlf$table
+
+# Order peaks by significance
+CTX_DAR$FDR <- p.adjust(CTX_DAR$PValue, method="fdr")
+
+#Extract DARs
+CTX_DAR <- CTX_DAR[order(CTX_DAR$PValue),]
+
+#Cleanup
+rm(CTXDGE_norm_disp, CTXfit, CTXqlf, CTXpeak_norm, CTXdesign, CTXpeakList)
+
+# Gene annotation and merge with dataset
+CTXovlp_peaks$ID <- paste(CTXovlp_peaks$Start, sep=".", CTXovlp_peaks$End)
+m <- CTXovlp_peaks$ID %in% CTX_annot$ID
+CTXovlp_peaks <- CTXovlp_peaks[m,]
+
+CTXovlp <- merge(CTXovlp_peaks, CTX_annot, by = "ID")
+rownames(CTXovlp) <- CTXovlp$Peak
+
+# summary table: add DAR category and sort by p value
+CTXovlp <- merge(CTX_DAR, CTXovlp[,c(2:6,19:22)], by = "row.names")
+row.names(CTXovlp) <- CTXovlp$Row.names
+CTXovlp <- CTXovlp[,c(7:10,2:6,12,14)]
+names(CTXovlp)[c(1,11)] <-  c("chr","GENE")
+CTXovlp <- CTXovlp %>% mutate(DAR = ifelse(logFC > 0 & FDR < 0.05, "Hyper",
+              ifelse(logFC < 0 & FDR < 0.05, "Hypo", "non-DAR"))) %>% arrange(PValue)
+CTXovlp$DAR <- factor(CTXovlp$DAR, levels=c("Hyper", "Hypo", "non-DAR"))
+
+# Volcano plot for unique CTX peaks
+top_genes <- head(CTXovlp, 20)
+
+CTX_volcano <- ggplot(CTXovlp, 
+                         aes(x=logFC, y=-log10(FDR), colour=DAR)) + 
+  geom_point(size=1) + 
+  xlim(-3,3) + 
+  ylim(0,11) +
+  scale_colour_manual(values=c("#de9483", "#de9483", "#e0b1a6")) + 
+  theme_classic() + 
+  ylab("-log10(FDR)") + 
+  guides(colour="none") + 
+  theme(text = element_text(size=24), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Cortex") + 
+  geom_text_repel(data = top_genes, aes(label = GENE), box.padding = 0.5, colour="#506777FF", size=5) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "slategrey") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "slategrey")
+
+combined_plot <- SN_volcano + CTX_volcano
+```
+
+```{r brain region unique peaks}
+SNunq <- SN_CTX_ovlp[[2]]
+SNunq <- SNunq %>% filter(Annot=="Other")
+SNunq_peaks <- SNunq[,c(1:4)]
+colnames(SNunq_peaks) <- c("Chr", "Start", "End", "Peak")
+
+SNunq_counts_peaks <- merge(SNunq_peaks, SN_counts, by.x = "Peak", by.y = "row.names")
+rownames(SNunq_counts_peaks) <- SNunq_counts_peaks$Peak
+SNunq_counts <- SNunq_counts_peaks[,c(5:13)]
+rm(SNunq_counts_peaks,SNunq)
+
+CTXunq <- CTX_SN_ovlp[[2]]
+CTXunq <- CTXunq %>% filter(Annot=="Other")
+CTXunq_peaks <- CTXunq[,c(1:4)]
+colnames(CTXunq_peaks) <- c("Chr", "Start", "End", "Peak")
+
+CTXunq_counts_peaks <- merge(CTXunq_peaks, CTX_counts, by.x = "Peak", by.y = "row.names")
+rownames(CTXunq_counts_peaks) <- CTXunq_counts_peaks$Peak
+CTXunq_counts <- CTXunq_counts_peaks[,c(5:13)]
+rm(CTXunq_counts_peaks,CTXunq)
+```
+
+```{r SN DAR unique}
+# Define groups for each sample and set control as reference
+SNgroup = factor(c(rep("rotenone",5),rep("control",4)))
+SNgroup <- relevel(SNgroup, "control")
+
+# Create DGEList object and calculate normalisation factors
+SNpeakList <- DGEList(counts = SNunq_counts, group = SNgroup)
+SNpeak_norm <- calcNormFactors(SNpeakList)
+
+# Estimate dispersion and fit model
+SNdesign <- model.matrix(~SNgroup)
+SNDGE_norm_disp <- estimateDisp(SNpeak_norm, SNdesign)
+SNfit <- glmQLFit(SNDGE_norm_disp, SNdesign)
+
+# Perform quasi-likelihood F test
+SNqlf <- glmQLFTest(SNfit)
+
+# Extract DARs
+SN_DAR <- SNqlf$table
+
+# Order peaks by significance
+SN_DAR$FDR <- p.adjust(SN_DAR$PValue, method="fdr")
+
+#Extract DARs
+SN_DAR <- SN_DAR[order(SN_DAR$PValue),]
+
+#Cleanup
+rm(SNDGE_norm_disp, SNfit, SNqlf, SNpeak_norm, SNdesign, SNpeakList)
+
+# Gene annotation and merge with dataset
+SNunq_peaks$ID <- paste(SNunq_peaks$Start, sep=".", SNunq_peaks$End)
+m <- SNunq_peaks$ID %in% SN_annot$ID
+SNunq_peaks <- SNunq_peaks[m,]
+
+SNunq <- merge(SNunq_peaks, SN_annot, by = "ID")
+rownames(SNunq) <- SNunq$Peak
+
+# summary table: add DAR category and sort by p value
+SNunq <- merge(SN_DAR, SNunq[,c(2:6,19:22)], by = "row.names")
+row.names(SNunq) <- SNunq$Row.names
+SNunq <- SNunq[,c(7:10,2:6,12,14)]
+names(SNunq)[c(1,11)] <-  c("chr","GENE")
+SNunq <- SNunq %>% mutate(DAR = ifelse(logFC > 0 & FDR < 0.05, "Hyper",
+              ifelse(logFC < 0 & FDR < 0.05, "Hypo", "non-DAR"))) %>% arrange(PValue)
+SNunq$DAR <- factor(SNunq$DAR, levels=c("Hyper", "Hypo", "non-DAR"))
+
+# Volcano plot for unique SN peaks
+top_genes <- head(SNunq, 20)
+
+SN_volcano <- ggplot(SNunq, 
+                         aes(x=logFC, y=-log10(FDR), colour=DAR)) + 
+  geom_point(size=1) + 
+  xlim(-3,3) + 
+  scale_colour_manual(values=c("#83d4b9", "#83d4b9", "#afe3d2")) + 
+  theme_classic() + 
+  ylab("-log10(FDR)") + 
+  guides(colour="none") + 
+  theme(text = element_text(size=24), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("SN") + 
+  geom_text_repel(data = top_genes, aes(label = GENE), box.padding = 0.5, colour="#506777FF", size=5) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "slategrey") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "slategrey")
+
+# GO enrichment for (1) hyperacetylated and (2) hypoacetylated unique SN regions 
+SN_unq_DAR_list <- list(Hyper=SNunq[SNunq$DAR=="Hyper",]$GENE, 
+                 Hypo=SNunq[SNunq$DAR=="Hypo",]$GENE)
+
+SN_unq_GO_DAR <- list() 
+for (x in c("Hyper", "Hypo")){
+  print(x)
+  
+  print("GO_Molecular_Function")
+  GO <- enrichGO(SN_unq_DAR_list[[x]],
+                    OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                    ont = "MF", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                    universe = NULL, qvalueCutoff = 0.05, 
+                    minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    SN_unq_GO_DAR[[x]]$GO_Molecular_Function <- as.data.frame(GO@result)
+    SN_unq_GO_DAR[[x]]$GO_Molecular_Function$direction <- x
+    SN_unq_GO_DAR[[x]]$GO_Molecular_Function$category <- "Molecular function"
+  }
+  
+  print("GO_Biological_Process")
+  GO <- enrichGO(SN_unq_DAR_list[[x]],
+                    OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                    ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                    universe = NULL, qvalueCutoff = 0.05, 
+                    minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    SN_unq_GO_DAR[[x]]$GO_Biological_Process <- as.data.frame(GO@result)
+    SN_unq_GO_DAR[[x]]$GO_Biological_Process$direction <- x
+    SN_unq_GO_DAR[[x]]$GO_Biological_Process$category <- "Biological process"
+  }
+}
+
+# GO summary tables: all / top 10
+SN_unq_GO_DAR_all <- do.call(rbind, lapply(unlist(SN_unq_GO_DAR, recursive = FALSE), as.data.frame))
+SN_unq_GO_DAR_top <- SN_unq_GO_DAR_all %>% arrange(p.adjust) %>% group_by(direction) %>% slice_head(n=10)
+SN_unq_GO_DAR_top$GeneRatioNumeric <- sapply(SN_unq_GO_DAR_top$GeneRatio, function(x) eval(parse(text = x)))
+
+#Plot GO enrichment
+SN_unq_GO_hyper_plot <- ggplot(SN_unq_GO_DAR_top[SN_unq_GO_DAR_top$direction == "Hyper", ],
+       aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)))) +
+  geom_point(aes(size = -log10(p.adjust), color = -log10(p.adjust)), alpha = 0.7) + 
+  scale_color_gradient(low = "#f0c560", high = "#e37c07") +
+  scale_size(range = c(1, 10)) + 
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_text(size = 18),
+    axis.title.x = element_text(size = 20),
+    plot.title = element_text(size = 24, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 18),
+    legend.title = element_text(size = 18),
+    strip.text = element_text(size = 18),
+    plot.margin = unit(c(1, 1, 1, 2), "lines") 
+  ) +
+  ggtitle("Enriched hyperacetylated pathways unique to the SN") +
+  xlab("Gene Ratio") + ylab("") +
+  guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "-log10(FDR)")) +
+  scale_y_discrete(labels = label_wrap_gen(55)) 
+
+SN_unq_GO_hyper_plot
+```
+
+```{r CTX DAR unique}
+# Define groups for each sample and set control as reference
+CTXgroup = factor(c(rep("rotenone", 2), rep("control", 3), rep("rotenone", 2),"control","rotenone"))
+CTXgroup <- relevel(CTXgroup, "control")
+
+# Create DGEList object and calculate normalisation factors
+CTXpeakList <- DGEList(counts = CTXunq_counts, group = CTXgroup)
+CTXpeak_norm <- calcNormFactors(CTXpeakList)
+
+# Quasi-likelihood F test design matrix
+CTXdesign <- model.matrix(~CTXgroup)
+
+# Estimate dispersion and fit model
+CTXDGE_norm_disp <- estimateDisp(CTXpeak_norm, CTXdesign)
+CTXfit <- glmQLFit(CTXDGE_norm_disp, CTXdesign)
+
+# Perform quasi-likelihood F test
+CTXqlf <- glmQLFTest(CTXfit)
+
+# Extract DARs
+CTX_DAR <- CTXqlf$table
+
+# Order peaks by significance
+CTX_DAR$FDR <- p.adjust(CTX_DAR$PValue, method="fdr")
+CTX_DAR <- CTX_DAR[order(CTX_DAR$PValue),]
+
+# Cleanup
+rm(CTXDGE_norm_disp, CTXfit, CTXqlf, CTXpeak_norm, CTXdesign, CTXpeakList)
+
+# Gene annotation
+CTXunq_peaks$ID <- paste(CTXunq_peaks$Start, sep=".", CTXunq_peaks$End)
+m <- CTXunq_peaks$ID %in% CTX_annot$ID
+CTXunq_peaks <- CTXunq_peaks[m,]
+
+CTXunq <- merge(CTXunq_peaks, CTX_annot, by = "ID")
+rownames(CTXunq) <- CTXunq$Peak
+
+# summary table: add DAR category and sort by p value
+CTXunq <- merge(CTX_DAR, CTXunq[,c(2:6,19:22)], by = "row.names")
+row.names(CTXunq) <- CTXunq$Row.names
+CTXunq <- CTXunq[,c(7:10,2:6,12,14)]
+names(CTXunq)[c(1,11)] <-  c("chr","GENE")
+CTXunq <- CTXunq %>% mutate(DAR = ifelse(logFC > 0 & FDR < 0.05, "Hyper",
+              ifelse(logFC < 0 & FDR < 0.05, "Hypo", "non-DAR"))) %>% arrange(PValue)
+CTXunq$DAR <- factor(CTXunq$DAR, levels=c("Hyper", "Hypo", "non-DAR"))
+
+#Volcano plot for cortex unique peaks
+CTXtop_genes <- head(CTXunq, 20)
+CTX_volcano <- ggplot(CTXunq, 
+                         aes(x=logFC, y=-log10(FDR), colour=DAR)) + 
+  geom_point(size=1) + 
+  xlim(-3,3) + 
+  scale_colour_manual(values=c("#de9483", "#de9483", "#e0b1a6")) + 
+  theme_classic() + 
+  ylab("-log10(FDR)") + 
+  guides(colour="none") + 
+  theme(text = element_text(size=24), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Cortex") + 
+  geom_text_repel(data = CTXtop_genes, aes(label = GENE), box.padding = 0.5, colour="#506777FF", size=5) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "slategrey") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "slategrey")
+
+#GO enrichment for cortex unique peaks
+CTX_unq_DAR_list <- list(Hyper=CTXunq[CTXunq$DAR=="Hyper",]$GENE, 
+                 Hypo=CTXunq[CTXunq$DAR=="Hypo",]$GENE)
+
+CTX_unq_GO_DAR <- list() 
+for (x in c("Hyper", "Hypo")){
+  print(x)
+  
+  print("GO_Molecular_Function")
+  GO <- enrichGO(CTX_unq_DAR_list[[x]],
+                    OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                    ont = "MF", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                    universe = NULL, qvalueCutoff = 0.05, 
+                    minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    CTX_unq_GO_DAR[[x]]$GO_Molecular_Function <- as.data.frame(GO@result)
+    CTX_unq_GO_DAR[[x]]$GO_Molecular_Function$direction <- x
+    CTX_unq_GO_DAR[[x]]$GO_Molecular_Function$category <- "Molecular function"
+  }
+  
+  print("GO_Biological_Process")
+  GO <- enrichGO(CTX_unq_DAR_list[[x]],
+                    OrgDb = org.Rn.eg.db, keyType = "SYMBOL", 
+                    ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "fdr", 
+                    universe = NULL, qvalueCutoff = 0.05, 
+                    minGSSize = 10, maxGSSize = 500, readable = FALSE, pool = FALSE)
+  if (nrow(GO@result) > 0) {
+    CTX_unq_GO_DAR[[x]]$GO_Biological_Process <- as.data.frame(GO@result)
+    CTX_unq_GO_DAR[[x]]$GO_Biological_Process$direction <- x
+    CTX_unq_GO_DAR[[x]]$GO_Biological_Process$category <- "Biological process"
+  }
+}
+
+# GO summary tables: all / top 10
+CTX_unq_GO_DAR_all <- do.call(rbind, lapply(unlist(CTX_unq_GO_DAR, recursive = FALSE), as.data.frame))
+CTX_unq_GO_DAR_top <- CTX_unq_GO_DAR_all %>% arrange(p.adjust) %>% group_by(direction) %>% slice_head(n=10)
+CTX_unq_GO_DAR_top$GeneRatioNumeric <- sapply(CTX_unq_GO_DAR_top$GeneRatio, function(x) eval(parse(text = x)))
+
+CTX_unq_GO_DAR_top$direction <- factor(CTX_unq_GO_DAR_top$direction, levels = c("Hyper", "Hypo"))
+
+hyper_colors <- c("Hyper" = "#e37c07")  # Orange for Hyper
+hypo_colors <- c("Hypo" = "#1f78b4")    # Blue for Hypo
+# Combine colors into a scale based on the direction
+custom_colors <- c(hyper_colors, hypo_colors)
+# Create the plot with facet grid for "Hyper" and "Hypo"
+CTX_unq_GO_facet_plot <- ggplot(CTX_unq_GO_DAR_top, 
+       aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)), color = direction)) +
+  geom_point(aes(size = -log10(p.adjust), alpha = 0.7)) + 
+  scale_color_manual(values = custom_colors) +  # Use custom colors for Hyper and Hypo
+  scale_size(range = c(1, 10)) + 
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_text(size = 18),
+    axis.title.x = element_text(size = 20),
+    plot.title = element_text(size = 20, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 18),
+    legend.title = element_text(size = 18),
+    strip.text = element_text(size = 18),
+    plot.margin = unit(c(1, 1, 1, 2), "lines") 
+  ) +
+  ggtitle("Enriched Pathways Unique to the Cortex") +
+  xlab("Gene Ratio") + ylab("") +
+  guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "Direction")) +
+  scale_y_discrete(labels = label_wrap_gen(55)) + 
+  facet_grid(. ~ direction)  # Add faceting by direction (Hyper and Hypo)
+
+
+CTX_unq_GO_hyper_plot <- ggplot(CTX_unq_GO_DAR_top[CTX_unq_GO_DAR_top$direction == "Hyper", ],
+       aes(x = GeneRatioNumeric, y = reorder(Description, -log10(p.adjust)))) +
+  geom_point(aes(size = -log10(p.adjust), color = -log10(p.adjust)), alpha = 0.7) + 
+  scale_color_gradient(low = "#f0c560", high = "#e37c07") +
+  scale_size(range = c(1, 10)) + 
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_text(size = 18),
+    axis.title.x = element_text(size = 20),
+    plot.title = element_text(size = 20, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 18),
+    legend.title = element_text(size = 18),
+    strip.text = element_text(size = 18),
+    plot.margin = unit(c(1, 1, 1, 2), "lines") 
+  ) +
+  ggtitle("Enriched hyperacetylated pathways unique to the cortex") +
+  xlab("Gene Ratio") + ylab("") +
+  guides(size = guide_legend(title = "-log10(FDR)"), color = guide_legend(title = "-log10(FDR)")) +
+  scale_y_discrete(labels = label_wrap_gen(55)) 
+
+CTX_unq_GO_hyper_plot
+```
