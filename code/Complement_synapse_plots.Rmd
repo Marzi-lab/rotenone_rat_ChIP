@@ -1,0 +1,427 @@
+---
+title: "complement and synapse plots"
+author: "Maria Tsalenchuk"
+date: "2024-10-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(stringi)
+library(readr)
+library(DESeq2)
+library(gtools)
+library(patchwork)
+library(png)
+library(GenomicRanges)
+library(openxlsx)
+library(gridExtra)
+library(ggseqlogo)
+library(scales)
+library(ggsignif)
+```
+
+#complement
+```{r complement boxplot}
+# Load relevant datasets
+load("../data/diffex.rda")
+SNmetadata <- read.csv("../data/SN_metadata.csv")
+CTXmetadata <- read.csv("../data/CTX_metadata.csv")
+
+SNmetadata$Sample_ID <- SNmetadata$ngsid
+CTXmetadata$Sample_ID <- CTXmetadata$ngsid
+
+SN_counts_rna <- round(SN_counts_rna)
+CTX_counts_rna <- round(CTX_counts_rna)
+
+ddsSN <- DESeqDataSetFromMatrix(countData = SN_counts_rna,
+                              colData = SNmetadata,
+                              design = ~ condition)
+
+ddsCTX <- DESeqDataSetFromMatrix(countData = CTX_counts_rna,
+                              colData = CTXmetadata,
+                              design = ~ condition)
+
+C1qa <- plotCounts(ddsSN, gene="C1qa", intgroup="condition", returnData = TRUE)
+C1qb <- plotCounts(ddsSN, gene="C1qb", intgroup="condition", returnData = TRUE)
+C1qc <- plotCounts(ddsSN, gene="C1qc", intgroup="condition", returnData = TRUE)
+
+C1qaC <- plotCounts(ddsCTX, gene="C1qa", intgroup="condition", returnData = TRUE)
+C1qbC <- plotCounts(ddsCTX, gene="C1qb", intgroup="condition", returnData = TRUE)
+C1qcC <- plotCounts(ddsCTX, gene="C1qc", intgroup="condition", returnData = TRUE)
+
+C1qa <- rbind(C1qa, C1qaC)
+C1qb <- rbind(C1qb, C1qbC)
+C1qc <- rbind(C1qc, C1qcC)
+
+rm(C1qaC,C1qbC,C1qcC)
+
+C1qa <- C1qa %>%
+  mutate(
+    region = ifelse(grepl("VM", condition), "SN", "cortex"),
+    treatment = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle"),
+    condition = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle")
+  )
+C1qb <- C1qb %>%
+  mutate(
+    region = ifelse(grepl("VM", condition), "SN", "cortex"),
+    treatment = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle"),
+    condition = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle")
+  )
+C1qc <- C1qc %>%
+  mutate(
+    region = ifelse(grepl("VM", condition), "SN", "cortex"),
+    treatment = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle"),
+    condition = ifelse(grepl("Rotenone", condition), "Rotenone", "Vehicle")
+  )
+
+C1qa <- C1qa %>%
+  mutate(treatment = paste(treatment, region, sep = "_"))
+C1qb <- C1qb %>%
+  mutate(treatment = paste(treatment, region, sep = "_"))
+C1qc <- C1qc %>%
+  mutate(treatment = paste(treatment, region, sep = "_"))
+
+# Perform t-tests and get p-values in scientific notation
+t_test_results_a <- C1qa %>%
+  group_by(region) %>%  
+  summarise(
+    p_value = t.test(count ~ condition)$p.value,  
+    p_value_scientific = formatC(p_value, format = "e", digits = 2) 
+  )
+t_test_results_b <- C1qb %>%
+  group_by(region) %>%  
+  summarise(
+    p_value = t.test(count ~ condition)$p.value,  
+    p_value_scientific = formatC(p_value, format = "e", digits = 2) 
+  )
+t_test_results_c <- C1qc %>%
+  group_by(region) %>%  
+  summarise(
+    p_value = t.test(count ~ condition)$p.value,  
+    p_value_scientific = formatC(p_value, format = "e", digits = 2) 
+  )
+
+p_values_a <- c(t_test_results_a$p_value_scientific[t_test_results_a$region == "SN"], 
+              t_test_results_a$p_value_scientific[t_test_results_a$region == "cortex"])
+p_values_b <- c(t_test_results_b$p_value_scientific[t_test_results_b$region == "SN"], 
+              t_test_results_b$p_value_scientific[t_test_results_b$region == "cortex"])
+p_values_c <- c(t_test_results_c$p_value_scientific[t_test_results_c$region == "SN"], 
+              t_test_results_c$p_value_scientific[t_test_results_c$region == "cortex"])
+
+
+C1qa$region <- factor(C1qa$region, levels = c("SN","cortex"))
+C1qa$condition <- factor(C1qa$condition, levels = c("Rotenone","Vehicle"))
+
+custom_colors <- c("Rotenone" = "#EEBCB1FF", 
+                   "Vehicle" = "#94C5CCFF")
+# Plot C1qa
+C1qa_plot <- ggplot(C1qa, aes(x = region, y = count, fill = condition)) + 
+  geom_boxplot() + 
+  theme_classic() + 
+  scale_fill_manual(values = custom_colors, name = "Condition", labels = c("ROT","VEH")) + 
+  ylab("Count") + 
+  ggtitle("C1qa") + 
+  xlab("Brain Region") + 
+  theme(
+    text = element_text(size = 22),  
+    axis.title.x = element_text(size = 22), 
+    axis.title.y = element_text(size = 22), 
+    axis.text.x = element_text(size = 14),   
+    axis.text.y = element_text(size = 16),   
+    plot.title = element_text(size = 24, hjust = 0.5, face = "italic"),  
+    legend.text = element_text(size = 16)  
+  ) + 
+  geom_jitter(width = 0.2, size = 1, alpha = 0.6) + 
+  labs(fill = NULL) + 
+  scale_x_discrete(labels = c("SN", "Cortex")) +
+  geom_signif(
+    comparisons = list(c("SN", "SN"), c("cortex", "cortex")),
+    annotations = p_values_a,  
+    map_signif_level = FALSE,  
+    textsize = 6, 
+    y_position = max(C1qa$count) + 30  
+  )
+
+# Plot C1qb
+C1qb$region <- factor(C1qb$region, levels = c("SN","cortex"))
+C1qb$condition <- factor(C1qb$condition, levels = c("Rotenone","Vehicle"))
+
+custom_colors <- c("Rotenone" = "#EEBCB1FF", 
+                   "Vehicle" = "#94C5CCFF")
+# Plot C1qb
+C1qb_plot <- ggplot(C1qb, aes(x = region, y = count, fill = condition)) + 
+  geom_boxplot() + 
+  theme_classic() + 
+  scale_fill_manual(values = custom_colors, name = "Condition", labels = c("ROT","VEH")) + 
+  ylab("Count") + 
+  ggtitle("C1qb") + 
+  xlab("Brain Region") + 
+  theme(
+    text = element_text(size = 22),  
+    axis.title.x = element_text(size = 22), 
+    axis.title.y = element_text(size = 22), 
+    axis.text.x = element_text(size = 14),   
+    axis.text.y = element_text(size = 16),   
+    plot.title = element_text(size = 24, hjust = 0.5, face = "italic"),  
+    legend.text = element_text(size = 16)  
+  ) + 
+  geom_jitter(width = 0.2, size = 1, alpha = 0.6) + 
+  labs(fill = NULL) + 
+  scale_x_discrete(labels = c("SN", "Cortex")) +
+  geom_signif(
+    comparisons = list(c("SN", "SN"), c("cortex", "cortex")),
+    annotations = p_values_b,  
+    map_signif_level = FALSE,  
+    textsize = 6, 
+    y_position = max(C1qb$count) + 30  
+  )
+
+# Plot C1qc
+C1qc$region <- factor(C1qc$region, levels = c("SN","cortex"))
+C1qc$condition <- factor(C1qc$condition, levels = c("Rotenone","Vehicle"))
+
+custom_colors <- c("Rotenone" = "#EEBCB1FF", 
+                   "Vehicle" = "#94C5CCFF")
+# Plot C1qc
+C1qc_plot <- ggplot(C1qc, aes(x = region, y = count, fill = condition)) + 
+  geom_boxplot() + 
+  theme_classic() + 
+  scale_fill_manual(values = custom_colors, name = "Condition", labels = c("ROT","VEH")) + 
+  ylab("Count") + 
+  ggtitle("C1qc") + 
+  xlab("Brain Region") + 
+  theme(
+    text = element_text(size = 22),  
+    axis.title.x = element_text(size = 22), 
+    axis.title.y = element_text(size = 22), 
+    axis.text.x = element_text(size = 14),   
+    axis.text.y = element_text(size = 16),   
+    plot.title = element_text(size = 24, hjust = 0.5, face = "italic"),  
+    legend.text = element_text(size = 16)  
+  ) + 
+  geom_jitter(width = 0.2, size = 1, alpha = 0.6) + 
+  labs(fill = NULL) + 
+  scale_x_discrete(labels = c("SN", "Cortex")) +
+  geom_signif(
+    comparisons = list(c("SN", "SN"), c("cortex", "cortex")),
+    annotations = p_values_c,  
+    map_signif_level = FALSE,  
+    textsize = 6, 
+    y_position = max(C1qc$count) + 30  
+  )
+
+# Combine the plots into one
+combined_plot <- (C1qa_plot | C1qb_plot | C1qc_plot) +
+  plot_layout(guides = 'collect') & 
+  theme(legend.position = 'right')
+```
+
+```{r complement chip violin}
+#read in complement gene list
+comp_genes <- read_excel("../data/Complement gene list for circulation.xlsx", sheet = 1)  
+
+# Define the new row names
+new_row_names <- c(rep("rotenone", 2), rep("control", 3), rep("rotenone", 2), "control", "rotenone")
+
+# Change the row names of the cortex data frame to fit
+colnames(CTX_counts) <- new_row_names
+
+# Create a new dataframe and calculate the averages
+SN_counts.df <- data.frame(
+  rotenone = rowMeans(SN_counts[, 1:5]),  
+  vehicle = rowMeans(SN_counts[, 6:9])    
+)
+
+CTX_counts.df <- data.frame(
+  rotenone = rowMeans(CTX_counts[, c(1,2,6,7,9)]), 
+  vehicle = rowMeans(CTX_counts[, c(3,4,5,8)])    
+)
+
+#annotate the counts
+SN_counts_peaks <- merge(SN_annot, SN_counts, by = "row.names")
+SN_counts_peaks <- SN_counts_peaks[,c(17,20:28)]
+
+CTX_counts_peaks <- merge(CTX_annot, CTX_counts, by = "row.names")
+CTX_counts_peaks <- CTX_counts_peaks[,c(17,20:28)]
+
+#filter by genes present in complement dataset
+SN_comp_chip_counts <- SN_counts_peaks[SN_counts_peaks$SYMBOL %in%comp_genes$`Gene name`,]
+CTX_comp_chip_counts <- CTX_counts_peaks[CTX_counts_peaks$SYMBOL %in%SN_comp_chip_counts$SYMBOL,]
+
+# reshape data
+SN_counts_long <- SN_comp_chip_counts %>%
+  pivot_longer(cols = -SYMBOL, 
+               names_to = "treatment",  
+               values_to = "count") %>%  
+  mutate(condition = ifelse(str_detect(treatment, "rotenone"), "Rotenone", "Vehicle"), region = "SN")  
+
+CTX_counts_long <- CTX_comp_chip_counts %>%
+  pivot_longer(cols = -SYMBOL,  
+               names_to = "treatment",  
+               values_to = "count") %>%  
+  mutate(condition = ifelse(str_detect(treatment, "rotenone"), "Rotenone", "Vehicle"), region = "cortex")  
+
+#combined cortex and SN
+combined_counts_long <- bind_rows(SN_counts_long, CTX_counts_long)
+
+combined_counts_long <- combined_counts_long %>%
+  mutate(treatment = paste(condition, region, sep = "_"))
+
+# Convert treatment to a factor with specified levels
+combined_counts_long$region <- factor(combined_counts_long$region, 
+                                         levels = c("SN","cortex"))
+
+#t tests for significance
+t_test_results <- combined_counts_long %>%
+  group_by(region) %>%  
+  summarise(
+    p_value = t.test(count ~ condition)$p.value,  
+    p_value_scientific = formatC(p_value, format = "e", digits = 2) 
+  )
+p_values <- c(t_test_results$p_value_scientific[t_test_results$region == "SN"], 
+              t_test_results$p_value_scientific[t_test_results$region == "cortex"])
+
+combined_counts_long$region <- factor(combined_counts_long$region, levels = c("SN","cortex"))
+combined_counts_long$condition <- factor(combined_counts_long$condition, levels = c("Rotenone","Vehicle"))
+
+custom_colors <- c("Rotenone" = "#EEBCB1FF", 
+                   "Vehicle" = "#94C5CCFF")
+
+viol <- ggplot(combined_counts_long, aes(x = region, y = count, fill = condition)) +
+  geom_violin(trim = FALSE, position = position_dodge(width = 0.6)) +  # Violin plot with dodge
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6), 
+             size = 0.8, alpha = 0.6, color = "black") +  # Jittered points with dodge
+  scale_fill_manual(values = custom_colors, name = "Condition", labels = c("ROT","VEH")) + 
+  labs(title = "",
+       x = "Brain Region",
+       y = "Count") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 24), 
+    axis.title.y = element_text(size = 24),  
+    axis.text.x = element_text(size = 16),  
+    axis.text.y = element_text(size = 20),
+    legend.title = element_text(size = 16), 
+    legend.text = element_text(size = 14)      
+  ) +
+  scale_x_discrete(labels = c("SN", "Cortex")) +
+  geom_signif(
+    comparisons = list(c("SN", "SN"), c("cortex", "cortex")),
+    annotations = p_values, 
+    map_signif_level = FALSE,  
+    textsize = 6, 
+    y_position = max(combined_counts_long$count) + 40  
+  )
+```
+
+#homer1 interactors
+```{r}
+#load unique CTX data
+load("../data/unq.rda")
+#genes based on https://doi.org/10.1038/s41380-020-00991-1
+genes <- c("grm5", "grm7", "lrp1", "dpp10", "cacna1c", "kcnma1", 
+           "cntn6", "ank3", "clasp1", "myh6", "xpo1", "sec31a", 
+           "trappc9", "itpr1", "shank2", "shank1", "grin2a", 
+           "grin2b", "epb41l1", "shank3","homer1")
+matched_genes <- CTXunq[grep(paste(genes, collapse = "|"), CTXunq$GENE, ignore.case = TRUE), ]
+
+# Define the new row names
+new_row_names <- c(rep("rotenone", 2), rep("control", 3), rep("rotenone", 2), "control", "rotenone")
+
+# Change the row names of the cortex data frame to fit
+colnames(CTX_counts) <- new_row_names
+
+# Create a new dataframe and calculate the averages
+CTX_counts.df <- data.frame(
+  rotenone = rowMeans(CTX_counts[, c(1,2,6,7,9)]), 
+  vehicle = rowMeans(CTX_counts[, c(3,4,5,8)])    
+)
+
+#annotate the counts
+CTX_counts_peaks <- merge(CTX_annot, CTX_counts, by = "row.names")
+CTX_counts_peaks$ID <- paste(CTX_counts_peaks$start, sep=".", CTX_counts_peaks$end)
+CTXunq$ID <- paste(CTXunq$Start, sep=".", CTXunq$End)
+CTX_counts_peaks <- merge(CTXunq, CTX_counts_peaks, by = "ID")
+
+#filter by genes present in complement dataset
+CTX_syn_chip_counts <- CTX_counts_peaks[CTX_counts_peaks$SYMBOL %in% matched_genes$GENE,]
+CTX_syn_chip_counts <- CTX_syn_chip_counts %>%
+  filter(DAR == "Hyper") %>%               
+  group_by(SYMBOL) %>%                     
+  slice_min(order_by = FDR, n = 1) %>%  
+  ungroup()
+
+CTX_syn_chip_counts <- CTX_syn_chip_counts[,c(12,32:40)]
+
+avg_peak_counts_CTX <- CTX_syn_chip_counts %>%
+  group_by(GENE) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+CTX_counts_long <- avg_peak_counts_CTX %>%
+  pivot_longer(cols = -GENE,  
+               names_to = "treatment",  
+               values_to = "count") %>%  
+  mutate(condition = ifelse(str_detect(treatment, "rotenone"), "Rotenone", "Vehicle"), region = "cortex")  
+
+CTX_counts_long$GENE <- factor(CTX_counts_long$GENE, levels = c("Homer1","Ank3","Cacna1c","Dpp10","Grin2a","Grin2b","Grm7","Itpr1","Lrp12","Sec31a","Shank1"))
+CTX_counts_long$condition <- factor(CTX_counts_long$condition, levels = c("Rotenone","Vehicle"))
+
+t_test_results <- CTX_counts_long %>%
+  group_by(GENE) %>%  
+  summarise(
+    p_value = t.test(count ~ condition)$p.value,  
+    p_value_scientific = formatC(p_value, format = "e", digits = 2) 
+  )
+
+gene_symbols <- c("Homer1", "Ank3", "Cacna1c", "Dpp10", "Grin2a", 
+                  "Grin2b", "Grm7", "Itpr1", "Lrp12", "Sec31a", "Shank1")
+
+# Extract p-values for each gene in the list
+p_values <- t_test_results$p_value_scientific[t_test_results$GENE %in% gene_symbols]
+
+custom_colors <- c("Rotenone" = "#EEBCB1FF", 
+                   "Vehicle" = "#94C5CCFF")
+
+# Plot C1qa
+syn_plot <- ggplot(CTX_counts_long, aes(x = GENE, y = count, fill = condition)) + 
+  geom_boxplot() + 
+  theme_classic() + 
+  scale_fill_manual(values = custom_colors, name = "Condition") + 
+  ylab("Count") + 
+  xlab("Genes") + 
+  theme(
+    text = element_text(size = 24),  
+    axis.title.x = element_text(size = 24), 
+    axis.title.y = element_text(size = 24), 
+    axis.text.x = element_text(size = 20),   
+    axis.text.y = element_text(size = 20),   
+    plot.title = element_text(size = 24, hjust = 0.5, face = "italic"),  
+    legend.text = element_text(size = 18)  
+  ) + 
+  geom_jitter(width = 0.2, size = 1, alpha = 0.6) + 
+  labs(fill = NULL) + 
+    geom_signif(
+    comparisons = list(
+      c("Homer1", "Homer1"),  
+      c("Ank3", "Ank3"),  
+      c("Cacna1c", "Cacna1c"),  
+      c("Dpp10", "Dpp10"),  
+      c("Grin2a", "Grin2a"),
+      c("Grin2b", "Grin2b"), 
+      c("Grm7", "Grm7"), 
+      c("Itpr1", "Itpr1"), 
+      c("Lrp12", "Lrp12"), 
+      c("Sec31a", "Sec31a"), 
+      c("Shank1", "Shank1")   
+    ), 
+    annotations = p_values,  
+    map_signif_level = FALSE,  
+    textsize = 6, 
+    y_position = max(CTX_counts_long$count) + 30  
+  )
+```
