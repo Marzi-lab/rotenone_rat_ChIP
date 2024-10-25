@@ -1,0 +1,16 @@
+ngsid,tissue,treatment,name,condition
+81781,cortex,Rotenone,11_CTX_Rotenone_A21,cortex_Rotenone
+81782,cortex,PBS,10_CTX_Vehicle_A19,cortex_PBS
+81783,cortex,Rotenone,20_CTX_Rotenone_B15,cortex_Rotenone
+81784,cortex,PBS,7_CTX_Vehicle_A13,cortex_PBS
+81786,cortex,PBS,6_CTX_Vehicle_A11,cortex_PBS
+81789,cortex,Rotenone,17_CTX_Rotenone_B9,cortex_Rotenone
+81790,cortex,PBS,1_CTX_Vehicle_A1,cortex_PBS
+81791,cortex,PBS,4_CTX_Vehicle_A7,cortex_PBS
+81792,cortex,Rotenone,19_CTX_Rotenone_B13,cortex_Rotenone
+81793,cortex,PBS,3_CTX_Vehicle_A5,cortex_PBS
+81794,cortex,Rotenone,18_CTX_Rotenone_B11,cortex_Rotenone
+81795,cortex,Rotenone,14_CTX_Rotenone_B3,cortex_Rotenone
+81797,cortex,PBS,5_CTX_Vehicle_A9,cortex_PBS
+81799,cortex,Rotenone,13_CTX_Rotenone_B1,cortex_Rotenone
+81800,cortex,Rotenone,15_CTX_Rotenone_B5,cortex_Rotenone
