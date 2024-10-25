@@ -1,0 +1,237 @@
+---
+title: "Motif analysis"
+author: "Maria Tsalenchuk"
+date: "2024-10-24"
+output: html_document
+---
+#load libraries
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(stringi)
+library(readr)
+library(gtools)
+library(patchwork)
+library(png)
+library(GenomicRanges)
+library(gridExtra)
+library(scales)
+library(paletteer)
+library(pheatmap)
+```
+## Motif analysis
+```{r SN H3K27ac motif analysis}
+# create a BED file for hyper-acetylated regions
+SN_DAR_hyper <- SN_DAR_annot[SN_DAR_annot$DAR=="Hyper",1:3]
+SN_DAR_hyper <- head(SN_DAR_hyper,100)
+SN_DAR_hyper$ID <- paste0("ID",row.names(SN_DAR_hyper))
+SN_DAR_hyper$value <- "0"
+SN_DAR_hyper$direction <- "+"
+write.table(SN_DAR_hyper,"../SN_DAR_hyper.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
+
+# create a BED file for hypo-acetylated regions
+SN_DAR_hypo <- SN_DAR_annot[SN_DAR_annot$DAR=="Hypo",1:3]
+SN_DAR_hypo <- head(SN_DAR_hypo,100)
+SN_DAR_hypo$ID <- paste0("ID",row.names(SN_DAR_hypo))
+SN_DAR_hypo$value <- "0"
+SN_DAR_hypo$direction <- "+"
+write.table(SN_DAR_hypo, "../SN_DAR_hypo.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
+
+# create a BED file for all peaks to be used as the background in HOMER
+SN_peaks_all <- SN_peaks
+SN_peaks_all$value <- "0"
+SN_peaks_all$direction <- "+"
+write.table(SN_peaks_all, "../SN_peaks_all.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+##### Motif analysis was carried out using Homer in bash #####
+
+#bed2pos.pl SN_DAR_hyper.bed -o SN_DAR_hyper_homer.bed
+
+#findMotifsGenome.pl SN_DAR_hyper_homer.bed rn7 $RESULTS_hyper -size given -bg SN_peaks_all.bed -p 8 
+
+#bed2pos.pl SN_DAR_hypo.bed -o SN_DAR_hypo_homer.bed
+
+#findMotifsGenome.pl SN_DAR_hypo_homer.bed rn7 $RESULTS_hypo -size given -bg SN_peaks_all.bed -p 8 
+
+```{r format motifs}
+# import result
+SN_motif_hyper <- read.delim("../data/SN_hyper_knownResults.txt", check.names = FALSE)
+SN_motif_hypo <- read.delim("../data/SN_hypo_knownResults.txt", check.names = FALSE)
+
+# annotate each motif to known transcription factors (TFs)
+SN_motif_hyper$TF <- sub("/.*", "", SN_motif_hyper$`Motif Name`)
+SN_motif_hypo$TF <- sub("/.*", "", SN_motif_hypo$`Motif Name`)
+
+# rename key columns
+names(SN_motif_hyper)[c(4,6)] = c("logP", "motif_number")
+SN_motif_hyper$logP <- -SN_motif_hyper$logP
+names(SN_motif_hypo)[c(4,6)] = c("logP", "motif_number")
+SN_motif_hypo$logP <- -SN_motif_hypo$logP
+
+SN_motif_hyper$fdr <- SN_motif_hyper$`q-value (Benjamini)`
+SN_motif_hypo$fdr <- SN_motif_hypo$`q-value (Benjamini)`
+SN_motif_hyper$log10fdr <- -log10(SN_motif_hyper$fdr)
+SN_motif_hypo$log10fdr <- -log10(SN_motif_hypo$fdr)
+# highlight significant SN_motifs
+SN_motif_hyper <- SN_motif_hyper %>% mutate(sig = ifelse(log10fdr > -log10(0.05), "Significant", "Non-significant"))
+SN_motif_hypo <- SN_motif_hypo %>% mutate(sig = ifelse(log10fdr > -log10(0.05), "Significant", "Non-significant"))
+```
+
+```{r plot SN hyper motif}
+SN_motif_hyper$TF_name <- sub("\\(.*", "", SN_motif_hyper$TF)
+
+# using immune relevant TFs from https://doi.org/10.1371/journal.pcbi.1010116
+immune_motif <- SN_motif_hyper[grepl("Tcf7|11b|Lef1|Tbx21|Snai3|Ikzf3|Hic1|Batf|Eomes|Epas1|Fosl2|Mef2c|11a|Tcf4|Lyl1|Ebf1|Pou2f2|Spi1|Zfp296|Pax5|Spib|Hes5|Tfeb|Pou2f1|Cxxc5|Mef2d|E2f2|Bhlhe41|Zbtb18|Bhlha15|Hhex|Hes1|Sp140|Meis1|Hoxa5|Spic|Tead1|Snai1|Prrx1|Hsf5|Lhx4|Hoxa3|Ar|Sox13|Egr2|Rorc|Rora|Nr4a3|Pbx3|Bhlhe40|Nfil3|Jdp2|Zkscan17|Mxd1|Prdm1|Nr4a2|Zfp105|Maf|Junb|Rara|Creb5|Nfe2|Zfp768|Hlx|Cebpg|Fos|Klf2|Cebpd|Jun|Klf13|Klf6|Rel|Isx|Atf3|Erg|Prdm5|Hnf4a|Etv6|Zfp184|Myb|Zfp449|Zfp647|Nfix|Msantd3|Hoxa10|Esr1|Mycn|Tal1|Tfec|Gfi1b|Thra|Pparg|Nfia|Hoxa9|Sox4|Six5|Vdr|Zik1|Zfp202|Pbx1|Aire|Tcf7l2|Hoxa7|Etv5|Myc|Nkx2-3|Zfp354a|Hlf|Nfic|Hoxb3|Zfp57|Glis2|Prdm16|Sox6|Pbx4|Gbx2|Klf12|Hoxa6|Mecom|TLR|PU.1|IRF|STAT|RUNX1|GATA3|IL|MAPK|IFN|MHC|TLR|TNF|NLR",
+                              SN_motif_hyper$`Motif Name`, ignore.case = TRUE), ]
+
+
+immune_names <- immune_motif[grepl("IRF|PU.1|RUNX|ROR|PPAR|NFIL3|IL|TLR|STAT|BACH|ESR|BCL|GATA|ERG", immune_motif$TF_name, ignore.case = TRUE),]
+immune_names <- immune_names[immune_names$sig == "Significant",]
+
+SN_motif_hyper$sig <- factor(SN_motif_hyper$sig, levels = c("Significant", "Non-significant"))
+SN_motif_hyper_plot <- 
+  ggplot(SN_motif_hyper, aes(x = motif_number, y = logP)) + 
+  geom_point(aes(size = 1, color = sig), alpha = 0.7) + 
+  xlab("Number of peaks with motif") + 
+  ylab("-log10(FDR)") + 
+  ggtitle("SN enriched motifs") + 
+  theme_minimal() + 
+  guides(size = "none", color = guide_legend(title = "")) +
+  scale_colour_manual(values = c("#DE7862FF","grey")) +
+  theme(text = element_text(size = 24), 
+        plot.title = element_text(size = 24, face = "bold", vjust = 1.5)) +  
+  geom_label_repel(size = 6, 
+                   data = immune_names, 
+                   min.segment.length = unit(0, 'lines'), 
+                   aes(x = motif_number, y = logP, label = TF_name), 
+                   show.legend = FALSE, 
+                   max.overlaps = 10, 
+                   force = 20)
+```
+
+```{r plot SN hypo motif}
+SN_motif_hypo$TF_name <- sub("\\(.*", "", SN_motif_hypo$TF)
+
+SN_motif_hypo_plot <- 
+  ggplot(SN_motif_hypo, aes(x=motif_number, y=logP)) + 
+  geom_point(aes(size=1, color=sig), alpha = 0.7) + xlab("Number of peaks with motif") + ylab("-log2(FDR)") + 
+  ggtitle("Significantly enriched motifs for hypoacetylated regions in the SNpc") + theme_minimal() + 
+  guides(size = "none", color = guide_legend(title="")) +
+  scale_colour_manual(values = c("black", "#278B9AFF")) +
+  theme(text = element_text(size = 14), plot.title = element_text(size = 16, face="bold", vjust = 2.5)) + 
+  geom_label_repel(size = 4, data = SN_motif_hypo[SN_motif_hypo$sig=="Significant",], min.segment.length = unit(0, 'lines'), 
+                   aes(x=motif_number, y=logP, label=TF_name, size=0.1),
+                   show.legend=FALSE, max.overlaps = 10, force = 20)
+SN_motif_hypo_plot
+```
+
+```{r immune motif}
+## A: motif enrichment heatmap ## 
+SN_motif_hyper$`% of Target Sequences with Motif` <- gsub("%", "", SN_motif_hyper$`% of Target Sequences with Motif`)
+SN_motif_hyper$`% of Background Sequences with Motif` <- gsub("%", "", SN_motif_hyper$`% of Background Sequences with Motif`)
+
+# delete rows where percentage in background is 0 
+SN_motif_hyper <- SN_motif_hyper [as.numeric(SN_motif_hyper$`% of Background Sequences with Motif`) != 0.00, ]
+
+# calculate log2enr 
+SN_motif_hyper$logFC <- log2(as.numeric(SN_motif_hyper$`% of Target Sequences with Motif`) / as.numeric(SN_motif_hyper$`% of Background Sequences with Motif`))
+
+# using immune relevant TFs from https://doi.org/10.1371/journal.pcbi.1010116
+immune_motif <- SN_motif_hyper[grepl("Tcf7|11b|Lef1|Tbx21|Snai3|Ikzf3|Hic1|Batf|Eomes|Epas1|Fosl2|Mef2c|11a|Tcf4|Lyl1|Ebf1|Pou2f2|Spi1|Zfp296|Pax5|Spib|Hes5|Tfeb|Pou2f1|Cxxc5|Mef2d|E2f2|Bhlhe41|Zbtb18|Bhlha15|Hhex|Hes1|Sp140|Meis1|Hoxa5|Spic|Tead1|Snai1|Prrx1|Hsf5|Lhx4|Hoxa3|Ar|Sox13|Egr2|Rorc|Rora|Nr4a3|Pbx3|Bhlhe40|Nfil3|Jdp2|Zkscan17|Mxd1|Prdm1|Nr4a2|Zfp105|Maf|Junb|Rara|Creb5|Nfe2|Zfp768|Hlx|Cebpg|Fos|Klf2|Cebpd|Jun|Klf13|Klf6|Rel|Isx|Atf3|Erg|Prdm5|Hnf4a|Etv6|Zfp184|Myb|Zfp449|Zfp647|Nfix|Msantd3|Hoxa10|Esr1|Mycn|Tal1|Tfec|Gfi1b|Thra|Pparg|Nfia|Hoxa9|Sox4|Six5|Vdr|Zik1|Zfp202|Pbx1|Aire|Tcf7l2|Hoxa7|Etv5|Myc|Nkx2-3|Zfp354a|Hlf|Nfic|Hoxb3|Zfp57|Glis2|Prdm16|Sox6|Pbx4|Gbx2|Klf12|Hoxa6|Mecom|TLR|PU.1|IRF|STAT|RUNX1|GATA3|IL|MAPK|IFN|MHC|TLR|TNF|NLR|pu.1|sall1|mef2|mafb|irf|bhlhe40|tfec|atf|smad3|runx1|nfkb|rel",
+                              SN_motif_hyper$`Motif Name`, ignore.case = TRUE), ]
+
+immune_motif$TF_name <- str_replace_all(immune_motif$TF, "\\(.*?\\)", "")
+immune_motif$TF_name <- str_trim(immune_motif$TF_name)
+immune_motif$TF_name <- str_replace_all(immune_motif$TF_name, ",.*", "")
+
+
+rownames(immune_motif) <- c(1:140)
+immune_motif <- immune_motif[1:121,]
+immune_motif <- immune_motif[order(immune_motif$log10fdr),]
+```
+
+```{r heatmap of immune TF expression}
+immune_TF_names <- read.csv("../data/genes_TF.csv", header = TRUE, sep = ",")
+load("../data/motif.rda")
+ensembl_tf <- immune_TF_names[[2]]
+
+#subset ChIP data by present immune TFs
+immune_chip <- SN_DAR_annot[SN_DAR_annot$GENE %in% ensembl_tf,]
+immune_chip_unique <- immune_chip %>%
+  group_by(GENE) %>%
+  filter(logFC == max(logFC)) %>%
+  ungroup()
+
+# Sort by logfold_change in descending order
+immune_chip_unique <- immune_chip_unique %>%
+  arrange(desc(logFC))
+
+#subset RNA data by present immune TFs
+immune_rna <- DGE_SN[DGE_SN$Gene %in% ensembl_tf,]
+
+#which genes are present in both ChIP and RNA datasets
+overlap_genes <- intersect(immune_chip_unique$GENE, immune_rna$Gene)
+
+filtered_immune_chip <- immune_chip_unique %>%
+  filter(GENE %in% overlap_genes)
+
+# Filter immune_rna by overlap_genes
+filtered_immune_rna <- immune_rna %>%
+  filter(Gene %in% overlap_genes)
+
+filtered_immune_rna <- filtered_immune_rna %>%
+  arrange(Gene)
+
+filtered_immune_chip <- filtered_immune_chip %>%
+  arrange(GENE)
+
+logFC_rna <- filtered_immune_rna$logFC
+logFC_chip <- filtered_immune_chip$logFC
+tf <- filtered_immune_chip$GENE
+names(logFC_rna) <- tf
+names(logFC_chip) <- tf
+logFC_matrix <- cbind(logFC_rna, logFC_chip)
+rownames(logFC_matrix) <- tf
+colnames(logFC_matrix) <- c("RNA","ChIP")
+
+Assay <- c("RNA","ChIP")
+ann_col <- data.frame(Assay)
+row.names(ann_col) <- colnames(logFC_matrix)
+
+colors <- c(RNA = "#67B8D6FF",ChIP="#E9D097FF")
+
+ann_colors <- list(Assay = setNames(colors, Assay))
+
+colour_palette <- paletteer_c("ggthemes::Red-Blue Diverging", 100)
+colour_palette <- rev(colour_palette)
+breaks <- seq(-4.5, 4.5, length.out = 101)
+
+deg_heatmap <- pheatmap(
+  logFC_matrix,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  main = "Immune TFs logFC",
+  show_colnames = FALSE,
+  show_rownames = TRUE,
+  annotation_col = ann_col,
+  annotation_colors = ann_colors,
+  fontsize_row = 12,
+  angle_row = 45, 
+  cellwidth = 10,
+  cellheight = 10,
+  legend = TRUE,       
+  legend_scale = 1,    
+  treeheight_row = 0,
+  color = colour_palette,
+  treeheight_col = 0,
+  legend_position = "right",
+  border_color = NA,
+  breaks = breaks
+)
+
+```
+
